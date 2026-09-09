@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.local
+.env.production
+.DS_Store
+.claude/
+.agents/
+.windsurf/
+skills-lock.json
+prisma7.config.ts
+*.pem
+*.log
+npm-debug.log*

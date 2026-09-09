@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  FACULTY
+  TECHNICIAN
+  ADMIN
+}
+
+enum TicketStatus {
+  OPEN
+  CLAIMED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  NORMAL
+  URGENT
+}
+
+model User {
+  id              Int            @id @default(autoincrement())
+  adObjectId      String?        @unique
+  name            String
+  email           String         @unique
+  password        String?
+  role            Role           @default(STUDENT)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  submittedTickets Ticket[]      @relation("RequesterTickets")
+  assignedTickets  Ticket[]      @relation("TechnicianTickets")
+  ticketUpdates    TicketUpdate[]
+}
+
+model Category {
+  id      Int      @id @default(autoincrement())
+  name    String   @unique
+  tickets Ticket[]
+}
+
+model Ticket {
+  id            Int          @id @default(autoincrement())
+  title         String
+  description   String       @db.Text
+  status        TicketStatus @default(OPEN)
+  priority      Priority     @default(NORMAL)
+  roomLocation  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  requesterId   Int
+  requester     User         @relation("RequesterTickets", fields: [requesterId], references: [id])
+  technicianId  Int?
+  technician    User?        @relation("TechnicianTickets", fields: [technicianId], references: [id])
+  categoryId    Int?
+  category      Category?    @relation(fields: [categoryId], references: [id])
+  updates       TicketUpdate[]
+}
+
+model TicketUpdate {
+  id        Int      @id @default(autoincrement())
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+  ticketId  Int
+  ticket    Ticket   @relation(fields: [ticketId], references: [id])
+  authorId  Int
+  author    User     @relation(fields: [authorId], references: [id])
+}
