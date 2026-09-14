@@ -66,11 +66,8 @@ router.get("/callback", async (req, res) => {
       { expiresIn: "24h" }
     );
 
-    res.json({
-      message: "AD login successful",
-      token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    });
+        // Redirect to the frontend with the token as a query param
+    res.redirect(`/helpdesk/?token=${token}`);
   } catch (error) {
     console.error("AD callback error:", error);
     res.status(500).json({ error: "AD authentication failed" });

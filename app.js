@@ -29,7 +29,7 @@ async function main() {
 
   app.use(cors());
   app.use(express.json());
-
+  app.use("/helpdesk", express.static("public"));
   app.get("/helpdesk/api/health", (req, res) => {
     res.json({ status: "ok", service: "helpdesk-api" });
   });

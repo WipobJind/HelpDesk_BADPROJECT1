@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>HelpDesk</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #f7f7f9; }
+  h1 { color: #2f5496; }
+  .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  button { background: #2f5496; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; margin-right: 6px; }
+  button:hover { background: #24406e; }
+  input, textarea { width: 100%; padding: 8px; margin: 6px 0 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: inherit; }
+  .ticket { border-bottom: 1px solid #eee; padding: 10px 0; }
+  .ticket:last-child { border-bottom: none; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #e0e7ff; color: #3730a3; margin-left: 6px; }
+  #userInfo { color: #555; font-size: 14px; }
+  #loginBtn { display: none; }
+  #app { display: none; }
+  .actions { margin-top: 6px; }
+  select { padding: 6px; border-radius: 4px; border: 1px solid #ccc; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>🎫 HelpDesk</h1>
+
+<div class="card" id="loginCard">
+  <p>Log in with your university Microsoft account to continue.</p>
+  <button id="loginBtn" onclick="login()">Login with Microsoft</button>
+</div>
+
+<div id="app">
+  <div class="card">
+    <div id="userInfo"></div>
+    <button onclick="logout()" style="background:#999; margin-top:8px;">Logout</button>
+  </div>
+
+  <div class="card" id="createCard">
+    <h3>Submit a Ticket</h3>
+    <input id="title" placeholder="Title (e.g. Wifi not working)" />
+    <textarea id="description" rows="3" placeholder="Describe the issue..."></textarea>
+    <button onclick="createTicket()">Submit Ticket</button>
+    <p id="createStatus"></p>
+  </div>
+
+  <div class="card">
+    <h3>Tickets</h3>
+    <button onclick="loadTickets()" style="margin-bottom:10px;">Refresh</button>
+    <div id="ticketList">Loading...</div>
+  </div>
+</div>
+
+<script>
+  const API_BASE = "/helpdesk/api";
+  let currentUser = null;
+
+  window.onload = () => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenFromUrl = params.get("token");
+    if (tokenFromUrl) {
+      localStorage.setItem("token", tokenFromUrl);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    const token = localStorage.getItem("token");
+    if (token) {
+      showApp();
+    } else {
+      document.getElementById("loginBtn").style.display = "inline-block";
+    }
+  };
+
+  function login() {
+    window.location.href = API_BASE + "/auth/login";
+  }
+
+  function logout() {
+    localStorage.removeItem("token");
+    window.location.reload();
+  }
+
+  function authHeaders(extra = {}) {
+    return { Authorization: "Bearer " + localStorage.getItem("token"), ...extra };
+  }
+
+  async function showApp() {
+    document.getElementById("loginCard").style.display = "none";
+    document.getElementById("app").style.display = "block";
+
+    try {
+      const res = await fetch(API_BASE + "/auth/me", { headers: authHeaders() });
+      if (!res.ok) throw new Error("Session expired");
+      currentUser = await res.json();
+      document.getElementById("userInfo").innerHTML =
+        `Logged in as <strong>${currentUser.name}</strong> (${currentUser.email}) <span class="badge">${currentUser.role}</span>`;
+
+      loadTickets();
+    } catch (e) {
+      logout();
+    }
+  }
+
+  async function createTicket() {
+    const title = document.getElementById("title").value;
+    const description = document.getElementById("description").value;
+    const statusEl = document.getElementById("createStatus");
+
+    if (!title || !description) {
+      statusEl.textContent = "Please fill in both fields.";
+      return;
+    }
+
+    statusEl.textContent = "Submitting...";
+    try {
+      const res = await fetch(API_BASE + "/tickets", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ title, description }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create ticket");
+
+      statusEl.textContent = `Ticket created! Category: ${data.category?.name || "Uncategorized"}`;
+      document.getElementById("title").value = "";
+      document.getElementById("description").value = "";
+      loadTickets();
+    } catch (e) {
+      statusEl.textContent = "Error: " + e.message;
+    }
+  }
+
+  async function loadTickets() {
+    const listEl = document.getElementById("ticketList");
+    listEl.textContent = "Loading...";
+    try {
+      const res = await fetch(API_BASE + "/tickets", { headers: authHeaders() });
+      const data = await res.json();
+const tickets = data.tickets;
+      if (!Array.isArray(tickets) || tickets.length === 0) {
+        listEl.textContent = "No tickets yet.";
+        return;
+      }
+
+      const isStaff = currentUser && (currentUser.role === "TECHNICIAN" || currentUser.role === "ADMIN");
+
+      listEl.innerHTML = tickets
+        .map((t) => {
+          const staffControls = isStaff
+            ? `<div class="actions">
+                 ${!t.technicianId ? `<button onclick="claimTicket('${t.id}')">Claim</button>` : ""}
+                 <select id="status-${t.id}">
+                   ${["OPEN","CLAIMED","IN_PROGRESS","RESOLVED","CLOSED"]
+                     .map((s) => `<option value="${s}" ${s === t.status ? "selected" : ""}>${s}</option>`)
+                     .join("")}
+                 </select>
+                 <button onclick="updateStatus('${t.id}')">Update</button>
+               </div>`
+            : "";
+
+          return `
+            <div class="ticket">
+              <strong>${t.title}</strong>
+              <span class="badge">${t.status}</span>
+              <span class="badge">${t.category?.name || "Uncategorized"}</span>
+              <p style="margin:4px 0; color:#555;">${t.description}</p>
+              <p style="margin:0; font-size:12px; color:#888;">Requested by ${t.requester?.name || "Unknown"}${t.technician ? ` · Assigned to ${t.technician.name}` : ""}</p>
+              ${staffControls}
+            </div>`;
+        })
+        .join("");
+    } catch (e) {
+      listEl.textContent = "Failed to load tickets.";
+    }
+  }
+
+  async function claimTicket(id) {
+    try {
+      const res = await fetch(`${API_BASE}/tickets/${id}/claim`, {
+        method: "PATCH",
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to claim ticket");
+      loadTickets();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function updateStatus(id) {
+    const status = document.getElementById(`status-${id}`).value;
+    try {
+      const res = await fetch(`${API_BASE}/tickets/${id}/status`, {
+        method: "PATCH",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error("Failed to update status");
+      loadTickets();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+</script>
+
+</body>
+</html>
