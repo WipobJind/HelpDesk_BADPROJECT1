@@ -1,71 +1,65 @@
 const express = require("express");
-const bcrypt = require("bcrypt");
+const msal = require("@azure/msal-node");
 const jwt = require("jsonwebtoken");
 const prisma = require("../services/prisma");
 
 const router = express.Router();
 
-// POST /helpdesk/api/auth/register
-router.post("/register", async (req, res) => {
+const REDIRECT_URI = "https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/callback";
+
+function getMsalClient() {
+  return new msal.ConfidentialClientApplication({
+    auth: {
+      clientId: process.env.AZURE_AD_CLIENT_ID,
+      authority: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID}`,
+      clientSecret: process.env.AZURE_AD_CLIENT_SECRET,
+    },
+  });
+}
+
+// GET /helpdesk/api/auth/login - redirects user to Microsoft login
+router.get("/login", async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: "Name, email, and password are required" });
-    }
-
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return res.status(409).json({ error: "Email already registered" });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        role: role || "STUDENT",
-      },
+    const msalClient = getMsalClient();
+    const authUrl = await msalClient.getAuthCodeUrl({
+      scopes: ["user.read"],
+      redirectUri: REDIRECT_URI,
     });
-
-    const token = jwt.sign(
-      { userId: user.id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "24h" }
-    );
-
-    res.status(201).json({
-      message: "User registered successfully",
-      token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    });
+    res.redirect(authUrl);
   } catch (error) {
-    console.error("Registration error:", error);
-    res.status(500).json({ error: "Registration failed" });
+    console.error("AD login redirect error:", error);
+    res.status(500).json({ error: "Failed to initiate login" });
   }
 });
 
-// POST /helpdesk/api/auth/login
-router.post("/login", async (req, res) => {
+// GET /helpdesk/api/auth/callback - Microsoft redirects here after login
+router.get("/callback", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const msalClient = getMsalClient();
+    const tokenResponse = await msalClient.acquireTokenByCode({
+      code: req.query.code,
+      scopes: ["user.read"],
+      redirectUri: REDIRECT_URI,
+    });
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+    const { oid, name, preferred_username } = tokenResponse.account.idTokenClaims;
+    const email = preferred_username || tokenResponse.account.username;
+
+    // Find or create the user based on their AD Object ID
+    let user = await prisma.user.findUnique({ where: { adObjectId: oid } });
+
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          adObjectId: oid,
+          name: name || email,
+          email: email,
+          role: "STUDENT", // default role; admins can promote via /admin routes
+        },
+      });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !user.password) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-
+    // Issue our own app JWT, same as before
     const token = jwt.sign(
       { userId: user.id, role: user.role },
       process.env.JWT_SECRET,
@@ -73,34 +67,30 @@ router.post("/login", async (req, res) => {
     );
 
     res.json({
-      message: "Login successful",
+      message: "AD login successful",
       token,
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
     });
   } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ error: "Login failed" });
+    console.error("AD callback error:", error);
+    res.status(500).json({ error: "AD authentication failed" });
   }
 });
 
-// GET /helpdesk/api/auth/me
-const verifyToken = require("../middleware/verifyToken");
-
-router.get("/me", verifyToken, async (req, res) => {
+// GET /helpdesk/api/auth/me - get current user info from JWT
+router.get("/me", async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    });
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "No token provided" });
 
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-    res.json(user);
+    res.json({ id: user.id, name: user.name, email: user.email, role: user.role });
   } catch (error) {
-    console.error("Get user error:", error);
-    res.status(500).json({ error: "Failed to get user" });
+    res.status(401).json({ error: "Invalid token" });
   }
 });
 

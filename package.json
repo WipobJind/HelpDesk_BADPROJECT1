@@ -15,7 +15,10 @@
   "license": "ISC",
   "description": "Internal Campus IT HelpDesk Ticketing System",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@azure/identity": "^4.13.1",
+    "@azure/keyvault-secrets": "^4.11.2",
+    "@azure/msal-node": "^6.0.0",
+    "@google/genai": "^2.21.0",
     "@prisma/client": "^5.22.0",
     "@sendgrid/mail": "^8.1.6",
     "bcrypt": "^6.0.0",
