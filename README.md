@@ -38,7 +38,9 @@ Login is handled entirely through Microsoft Entra ID (Azure AD) using MSAL Node 
 5. The frontend receives the token via a redirect to /helpdesk/?token=... and stores it; API clients (curl/Postman) receive it the same way and should copy it manually
 
 ## Testing the Live System
+### Note on university WiFi
 
+The live deployment uses a free DuckDNS domain (helpdesk-badproject1.duckdns.org). Some university networks block or reset connections to DuckDNS-based domains as part of their firewall policy. If the live URL doesn't load while on campus WiFi, try switching to mobile data or a different network - the deployment itself is fully functional (verified directly on the server via curl), the block is network-side, not application-side.
 ### Option A - Web frontend (easiest)
 
 1. Visit https://helpdesk-badproject1.duckdns.org/helpdesk/
