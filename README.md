@@ -35,12 +35,14 @@ Login is handled entirely through Microsoft Entra ID (Azure AD) using MSAL Node 
 2. User signs in with their university account (@au.edu) - any account in the university's tenant can log in
 3. Microsoft redirects back to GET /helpdesk/api/auth/callback
 4. The backend finds or creates a User row (keyed on AD Object ID) and issues the app's own JWT
-5. The frontend receives the token via a redirect to /helpdesk/?token=... and stores it; API clients (curl/Postman) receive it the same way and should copy it manually
+5. The backend redirects to the frontend at /helpdesk/?token=..., and the frontend's JavaScript immediately saves the token to localStorage and cleans the URL bar. API clients (curl/Postman) need to retrieve this token via browser DevTools (see below), since it is not left visible in the URL.
 
 ## Testing the Live System
+
 ### Note on university WiFi
 
 The live deployment uses a free DuckDNS domain (helpdesk-badproject1.duckdns.org). Some university networks block or reset connections to DuckDNS-based domains as part of their firewall policy. If the live URL doesn't load while on campus WiFi, try switching to mobile data or a different network - the deployment itself is fully functional (verified directly on the server via curl), the block is network-side, not application-side.
+
 ### Option A - Web frontend (easiest)
 
 1. Visit https://helpdesk-badproject1.duckdns.org/helpdesk/
@@ -52,7 +54,11 @@ The live deployment uses a free DuckDNS domain (helpdesk-badproject1.duckdns.org
 
 Since AD login is a browser redirect flow, curl/Postman can't complete login on their own. Get a token first via the browser, then use it manually.
 
-1. Get a token: open https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/login in a browser, sign in, then copy the token value from the URL you're redirected to (?token=...).
+1. Get a token: open https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/login in a browser and sign in. You'll land on the HelpDesk frontend, which automatically stores your token. Open browser DevTools (F12) -> Console tab, and run:
+```
+localStorage.getItem("token")
+```
+Copy the token value shown (without the surrounding quotes).
 
 2. Get your user info:
 ```
