@@ -1,0 +1,33 @@
+
+
+# --- AFTER LOGGING IN (STUDENT) ---
+# grab token via browser DevTools console: localStorage.getItem("token")
+
+sudo mysql helpdesk -e "SELECT id, name, email, role, adObjectId FROM User WHERE email='u6710681@au.edu';"
+
+curl -X POST https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer STUDENT_TOKEN" \
+  -d '{"title":"Wifi not working","description":"Cannot connect to campus wifi in the library"}'
+
+curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets \
+  -H "Authorization: Bearer STUDENT_TOKEN"
+
+# --- PROMOTE TO ADMIN ---
+sudo mysql helpdesk -e "UPDATE User SET role='ADMIN' WHERE email='u6710681@au.edu';"
+# log out + log back in on frontend, grab new token via DevTools console
+
+curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets \
+  -H "Authorization: Bearer ADMIN_TOKEN"
+
+curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/claim \
+  -H "Authorization: Bearer ADMIN_TOKEN"
+
+curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/status \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -d '{"status":"RESOLVED"}'
+
+# --- SSL CHECK ---
+curl -v https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets \
+  -H "Authorization: Bearer ADMIN_TOKEN" 2>&1 | grep -i "SSL\|subject"

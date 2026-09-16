@@ -41,6 +41,7 @@ Express REST API (Node.js)
 | Identity and access | JWT based sessions with role based access control, backed by the university's Active Directory tenant through MSAL |
 | Secrets management | Azure Key Vault, accessed via the host's Managed Identity, no runtime secrets stored in source or configuration files |
 | Third party integrations | Google Gemini (ticket classification) and SendGrid (email notifications) |
+| Analytics | Ticket breakdowns by status, priority, category, and technician workload (TECHNICIAN and ADMIN only) |
 | Source control | GitHub, with commit history reflecting incremental development |
 | Process management | PM2, configured to recover from crashes and restart automatically after a host reboot |
 
@@ -70,10 +71,10 @@ Authentication is handled entirely through Microsoft Entra ID using MSAL Node; t
 1. `GET /helpdesk/api/auth/login` redirects the user to Microsoft's sign in page.
 2. The user authenticates with their university account. Any account within the organization's tenant is accepted.
 3. Microsoft redirects back to `GET /helpdesk/api/auth/callback` with an authorization code.
-4. The backend exchanges that code for the user's identity, then finds or creates a matching `User` record keyed on their Active Directory object ID, and issues the application's own signed JWT.
+4. The backend exchanges that code for the user's identity, then finds or creates a matching `User` record keyed on their Active Directory object ID, and issues the application's own signed JWT (expires after 24 hours).
 5. The backend redirects to the frontend with the token attached, and the frontend immediately stores it in local storage and clears it from the visible URL. Clients testing the API directly (curl or Postman) can retrieve the token from browser developer tools, described below.
 
-New accounts default to the STUDENT role. Elevating an account to TECHNICIAN or ADMIN currently requires direct database access, described in the testing section.
+New accounts default to the STUDENT role. An existing ADMIN can promote any account to TECHNICIAN or ADMIN through the admin API (`PATCH /helpdesk/api/admin/users/:id/role`). For the very first admin account, a direct database update is required (e.g. `UPDATE User SET role = 'ADMIN' WHERE id = 1;`).
 
 ## Testing the Live Deployment
 
@@ -105,12 +106,17 @@ curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/me -H "Authoriza
 
 3. Create a ticket:
 ```
-curl -X POST https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"title":"Wifi not working","description":"Cannot connect to campus wifi in the library"}'
+curl -X POST https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"title":"Wifi not working","description":"Cannot connect to campus wifi in the library","roomLocation":"Library 2F"}'
 ```
 
 4. List tickets:
 ```
 curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+The list endpoint accepts optional query parameters: `status` (OPEN, CLAIMED, IN_PROGRESS, RESOLVED, CLOSED), `priority` (NORMAL, URGENT), `categoryId`, `page`, and `limit` (default 20). Example:
+```
+curl "https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets?status=OPEN&page=1&limit=10" -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 5. Claim a ticket (requires TECHNICIAN or ADMIN):
@@ -123,6 +129,41 @@ curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICK
 curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/status -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"status":"IN_PROGRESS"}'
 ```
 
+7. Resolve a ticket with an optional resolution message (requires TECHNICIAN or ADMIN):
+```
+curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/resolve -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"resolution":"Replaced faulty access point"}'
+```
+
+8. Add a comment to a ticket:
+```
+curl -X POST https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/comments -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"message":"Tried restarting the router, issue persists"}'
+```
+
+9. List comments on a ticket:
+```
+curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/comments -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+10. View analytics (requires TECHNICIAN or ADMIN):
+```
+curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/analytics -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+11. List all users (requires ADMIN):
+```
+curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/admin/users -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+12. Update a user's role (requires ADMIN):
+```
+curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/admin/users/USER_ID/role -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"role":"TECHNICIAN"}'
+```
+
+13. Health check (no authentication required):
+```
+curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/health
+```
+
 Note: a user's role is embedded in their JWT at the time it is issued and is not re evaluated against the database on subsequent requests. If a role changes after a token has already been issued, the affected user must sign out and sign back in to receive a token reflecting the update.
 
 ## Secrets Management
@@ -132,7 +173,19 @@ No production secrets are stored in `.env`. At startup, `app.js` invokes `servic
 ## Local Development Setup
 
 1. Install dependencies: `npm install`
-2. Copy `.env.example` to `.env` and populate a local MySQL connection string, JWT secret, and Gemini/SendGrid keys.
+2. Copy `.env.example` to `.env` and fill in the values:
+```
+PORT=3000
+DATABASE_URL="mysql://user:password@localhost:3306/helpdesk"
+JWT_SECRET="your-jwt-secret-here"
+GEMINI_API_KEY="your-gemini-api-key"
+SENDGRID_API_KEY="your-sendgrid-api-key"
+SENDGRID_FROM_EMAIL="helpdesk@campus.local"
+AZURE_AD_CLIENT_ID="your-azure-ad-client-id"
+AZURE_AD_TENANT_ID="your-azure-ad-tenant-id"
+AZURE_AD_CLIENT_SECRET="your-azure-ad-client-secret"
+```
+Note: `AZURE_KEY_VAULT_URL` is only needed in production. The three `AZURE_AD_*` variables are required for Microsoft login to work.
 3. Apply migrations: `npx prisma migrate dev`
 4. Start the server: `npm start`
 5. Visit `http://localhost:3000/helpdesk/`, or confirm the service is running via `GET /helpdesk/api/health`
@@ -160,6 +213,11 @@ Defined in `prisma/schema.prisma`:
 * **Category**: populated automatically based on Gemini's classification of ticket content.
 * **TicketUpdate**: an audit trail of comments and status changes on a ticket.
 
-## Service Integration Scope
+## External Integrations Summary
 
-This project satisfies its external integration requirement through two independent third party APIs, Google Gemini and SendGrid, as described above. A peer to peer service integration with another team's API was not implemented for this project; that scope was addressed instead through the two integrations documented here.
+This project integrates two independent third party APIs beyond the core authentication provider:
+
+* **Google Gemini** handles automatic ticket categorization at the point of creation.
+* **SendGrid** delivers email notifications to the technician group when new tickets arrive.
+
+Both integrations run server side during the ticket creation flow and require no additional action from the end user.
