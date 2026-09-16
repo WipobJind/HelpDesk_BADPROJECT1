@@ -1,87 +1,104 @@
 # HelpDesk: Internal Campus IT Ticketing System
 
-A university IT support portal where students/faculty log in via Microsoft Entra ID (Active Directory) to submit tickets, and technicians claim and resolve them. Tickets are auto categorized by Google Gemini, and new tickets trigger a SendGrid email to technicians.
+A university IT support portal where students and faculty log in with their Microsoft Entra ID (Active Directory) credentials to submit tickets, and technicians claim and resolve them. Tickets are automatically categorized using Google Gemini, and new tickets trigger a SendGrid email notification to technicians.
 
 Live deployment: https://helpdesk-badproject1.duckdns.org/helpdesk/
 
 GitHub repository: https://github.com/WipobJind/HelpDesk_BADPROJECT1
 
-## Architecture Overview
+## Overview
 
+HelpDesk streamlines internal IT support for a university environment. Requesters submit tickets describing an issue, the system classifies the issue by category using an AI model, and technicians manage the resulting queue through role based access controls. All authentication is handled through the university's identity provider rather than a custom login system, and all production credentials are managed through a centralized secrets vault rather than local configuration files.
+
+## Architecture
+
+```
 Client (browser or curl/Postman)
-↓
-Nginx (reverse proxy, /helpdesk path, Let's Encrypt SSL)
-↓
-Express REST API (Node.js), which connects to:
-* Static frontend (public/index.html) served at /helpdesk/
-* Auth: Microsoft Entra ID (MSAL), issuing the app's own JWT (RBAC: STUDENT, FACULTY, TECHNICIAN, ADMIN)
-* Prisma ORM, connected to MySQL (Users, Tickets, Categories, TicketUpdates)
-* Google Gemini API, auto categorizes ticket text on creation
-* SendGrid API, emails technicians when a ticket is created
-* Azure Key Vault, fetches DB connection string, JWT secret, Gemini/SendGrid keys, and the AD client secret at runtime via the VM's Managed Identity (no production secrets stored in .env)
+        |
+        v
+Nginx (reverse proxy, /helpdesk path, TLS via Let's Encrypt)
+        |
+        v
+Express REST API (Node.js)
+        |
+        +--> Static frontend (public/index.html), served at /helpdesk/
+        +--> Authentication: Microsoft Entra ID (MSAL), app issued JWT (roles: STUDENT, FACULTY, TECHNICIAN, ADMIN)
+        +--> Prisma ORM, connected to MySQL (Users, Tickets, Categories, TicketUpdates)
+        +--> Google Gemini API, categorizes ticket text on creation
+        +--> SendGrid API, sends technician notifications on ticket creation
+        +--> Azure Key Vault, provides database credentials, JWT signing secret, and API keys
+             at runtime via the host's Managed Identity
+```
 
-## Core Requirements Checklist
+## Feature Summary
 
-| Requirement | How it's satisfied |
+| Area | Implementation |
 |---|---|
-| Infrastructure | Deployed on a hardened Azure Linux VM (Ubuntu 24.04 LTS) |
-| Networking and Deployment | Nginx reverse proxy, distinct /helpdesk URL path, Let's Encrypt SSL |
-| Backend | Node.js (Express) REST API |
-| Database | MySQL managed via Prisma ORM with migrations |
-| Security and Identity (User Auth) | JWT Authentication with RBAC, integrating the University's Microsoft Active Directory via MSAL |
-| Secrets Management (Azure Key Vault) | No .env in production, secrets fetched at runtime via the VM's Managed Identity |
-| External Integration (3rd Party) | Google Gemini API and SendGrid API (see below) |
-| Service to Service Integration (Peer API) | Waived per instructor's note, see below |
-| Source Code Management | GitHub repository (link above) |
-| Automation | PM2 process manager, auto restart on crash and VM reboot |
+| Hosting | Hardened Linux VM (Ubuntu 24.04 LTS) on Azure |
+| Reverse proxy and TLS | Nginx with a dedicated URL path, Let's Encrypt certificate, automatic HTTP to HTTPS redirect |
+| Backend | Node.js and Express REST API |
+| Data layer | MySQL, managed through Prisma ORM with versioned migrations |
+| Identity and access | JWT based sessions with role based access control, backed by the university's Active Directory tenant through MSAL |
+| Secrets management | Azure Key Vault, accessed via the host's Managed Identity, no runtime secrets stored in source or configuration files |
+| Third party integrations | Google Gemini (ticket classification) and SendGrid (email notifications) |
+| Source control | GitHub, with commit history reflecting incremental development |
+| Process management | PM2, configured to recover from crashes and restart automatically after a host reboot |
 
-## Peer API Requirement, Waived
+## Third Party Integrations
 
-Per the instructor's note on the project brief ("Project 01: No need to connect to friend's API. Just connect to any public API to demonstrate that you can."), the Service to Service (Peer API) requirement is not required for this project. It is replaced by the External Integration requirement below, satisfied via two independent public APIs, Gemini and SendGrid. No expose/consume endpoint pair with a classmate was built, per this waiver.
+This project integrates two independent external services to extend the backend's business logic:
 
-## External Integrations
+* **Google Gemini API** classifies each ticket's free text description into a category (Hardware, Software, Network, Account, or Other) at the moment of creation, so tickets are automatically routed without manual tagging.
+* **SendGrid API** sends an email notification to the assigned technician group whenever a new ticket is created.
 
-* Google Gemini API: Classifies each new ticket's description into a category (Hardware, Software, Network, Account, Other) at creation time.
-* SendGrid API: Emails technicians when a new ticket is submitted.
+A note on verifying SendGrid delivery: notifications are addressed to whichever account currently holds the technician role in the database (configured for demonstration purposes). Anyone testing independently without access to that inbox can confirm the integration executed successfully by checking the application logs (`pm2 logs helpdesk-api`) for a line similar to `Email notification sent to X technician(s)`, or by reviewing the Activity Feed in the SendGrid dashboard.
 
-Note on verifying SendGrid: emails are sent to whichever address is currently set as the technician's email in the database (used for demo purposes). If you're testing independently and want to confirm delivery without access to that inbox, check the PM2 logs for a line like "Email notification sent to X technician(s)" as confirmation the call succeeded, or the SendGrid dashboard's Activity Feed.
+**SendGrid delivery evidence:**
 
-## Authentication
+Application log confirming the notification was sent:
 
-Login is handled entirely through Microsoft Entra ID (Azure AD) using MSAL Node, no email/password accounts exist.
+![PM2 log showing SendGrid notification sent](screenshots/sendgrid-pm2-log.png)
 
-1. GET /helpdesk/api/auth/login redirects to Microsoft's login page
-2. User signs in with their university account (@au.edu), any account in the university's tenant can log in
-3. Microsoft redirects back to GET /helpdesk/api/auth/callback
-4. The backend finds or creates a User row (keyed on AD Object ID) and issues the app's own JWT
-5. The backend redirects to the frontend at /helpdesk/?token=..., and the frontend's JavaScript immediately saves the token to localStorage and cleans the URL bar. API clients (curl/Postman) need to retrieve this token via browser DevTools (see below), since it is not left visible in the URL.
+Notification email as received in the technician's inbox:
 
-New users default to the STUDENT role. Promoting a user to TECHNICIAN or ADMIN currently requires direct database access (see Testing section below).
+![SendGrid email received in inbox](screenshots/sendgrid-email-received.png)
 
-## Testing the Live System
+## Authentication Flow
 
-### Note on university WiFi
+Authentication is handled entirely through Microsoft Entra ID using MSAL Node; there are no local email and password accounts.
 
-The live deployment uses a free DuckDNS domain (helpdesk-badproject1.duckdns.org). Some university networks block or reset connections to DuckDNS based domains as part of their firewall policy. If the live URL doesn't load while on campus WiFi, try switching to mobile data or a different network, since the deployment itself is fully functional (verified directly on the server via curl); the block is network side, not application side.
+1. `GET /helpdesk/api/auth/login` redirects the user to Microsoft's sign in page.
+2. The user authenticates with their university account. Any account within the organization's tenant is accepted.
+3. Microsoft redirects back to `GET /helpdesk/api/auth/callback` with an authorization code.
+4. The backend exchanges that code for the user's identity, then finds or creates a matching `User` record keyed on their Active Directory object ID, and issues the application's own signed JWT.
+5. The backend redirects to the frontend with the token attached, and the frontend immediately stores it in local storage and clears it from the visible URL. Clients testing the API directly (curl or Postman) can retrieve the token from browser developer tools, described below.
 
-### Option A, Web frontend (easiest)
+New accounts default to the STUDENT role. Elevating an account to TECHNICIAN or ADMIN currently requires direct database access, described in the testing section.
+
+## Testing the Live Deployment
+
+### Network note
+
+This deployment uses a free dynamic DNS domain (helpdesk-badproject1.duckdns.org). Some networks, including certain university WiFi networks, block or reset connections to dynamic DNS domains as a matter of firewall policy. If the live URL is unreachable on a given network, try mobile data or an alternate connection; the deployment itself has been verified to respond correctly directly from the host, so an unreachable URL under these conditions reflects a network level restriction rather than an application fault.
+
+### Option A: Web interface
 
 1. Visit https://helpdesk-badproject1.duckdns.org/helpdesk/
-2. Click Login with Microsoft, sign in with any @au.edu account
-3. Submit a ticket, see it auto categorized
-4. If your account is promoted to TECHNICIAN or ADMIN in the database, you'll also see Claim/Status controls on tickets
+2. Select "Login with Microsoft" and authenticate with any account on the university's tenant.
+3. Submit a ticket and observe the category assigned automatically.
+4. Accounts elevated to TECHNICIAN or ADMIN will also see claim and status update controls on each ticket.
 
-### Option B, Direct API testing (curl / Postman)
+### Option B: Direct API access (curl or Postman)
 
-Since AD login is a browser redirect flow, curl/Postman can't complete login on their own. Get a token first via the browser, then use it manually.
+Because Active Directory login is a browser based redirect flow, it cannot be completed from curl or Postman alone. Obtain a token through the browser first, then use it for subsequent requests.
 
-1. Get a token: open https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/login in a browser and sign in. You'll land on the HelpDesk frontend, which automatically stores your token. Open browser DevTools (F12), Console tab, and run:
+1. Open https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/login in a browser and sign in. After landing on the frontend, open developer tools (F12), select the Console tab, and run:
 ```
 localStorage.getItem("token")
 ```
-Copy the token value shown (without the surrounding quotes).
+Copy the returned value, excluding the surrounding quotation marks.
 
-2. Get your user info:
+2. Retrieve the current user's profile:
 ```
 curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/auth/me -H "Authorization: Bearer YOUR_TOKEN"
 ```
@@ -96,55 +113,53 @@ curl -X POST https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets -H "C
 curl https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-5. Claim a ticket (requires a TECHNICIAN or ADMIN account):
+5. Claim a ticket (requires TECHNICIAN or ADMIN):
 ```
 curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/claim -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-6. Update ticket status (requires a TECHNICIAN or ADMIN account):
+6. Update a ticket's status (requires TECHNICIAN or ADMIN):
 ```
 curl -X PATCH https://helpdesk-badproject1.duckdns.org/helpdesk/api/tickets/TICKET_ID/status -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"status":"IN_PROGRESS"}'
 ```
 
-Note: if your role is changed in the database after you've already logged in, you must log out and log back in to receive a new token reflecting the updated role, since the JWT's role claim is set at login time and is not re checked against the database on every request.
+Note: a user's role is embedded in their JWT at the time it is issued and is not re evaluated against the database on subsequent requests. If a role changes after a token has already been issued, the affected user must sign out and sign back in to receive a token reflecting the update.
 
 ## Secrets Management
 
-No production secrets are stored in .env. At startup, app.js calls services/keyvault.js, which authenticates to Azure Key Vault using the VM's system assigned Managed Identity (no credentials needed) and fetches: DATABASE URL, JWT SECRET, GEMINI API KEY, SENDGRID API KEY, SENDGRID FROM EMAIL, AZURE AD CLIENT SECRET.
+No production secrets are stored in `.env`. At startup, `app.js` invokes `services/keyvault.js`, which authenticates to Azure Key Vault using the host's system assigned Managed Identity and retrieves the database connection string, JWT signing secret, Gemini API key, SendGrid API key, sender address, and the Active Directory client secret. A local `.env` file is used only as a development fallback when `AZURE_KEY_VAULT_URL` is not configured.
 
-.env is only used as a local development fallback when AZURE_KEY_VAULT_URL isn't configured.
+## Local Development Setup
 
-## Setup (local development)
+1. Install dependencies: `npm install`
+2. Copy `.env.example` to `.env` and populate a local MySQL connection string, JWT secret, and Gemini/SendGrid keys.
+3. Apply migrations: `npx prisma migrate dev`
+4. Start the server: `npm start`
+5. Visit `http://localhost:3000/helpdesk/`, or confirm the service is running via `GET /helpdesk/api/health`
 
-1. Install dependencies: npm install
-2. Copy .env.example to .env and fill in a local MySQL connection string, a JWT secret, and your Gemini/SendGrid keys.
-3. Run migrations: npx prisma migrate dev
-4. Start the dev server: npm start
-5. Visit http://localhost:3000/helpdesk/ or health check GET /helpdesk/api/health
+## Deployment Details
 
-## Deployment
+* **Infrastructure**: Azure virtual machine (Ubuntu 24.04 LTS), firewalled with UFW to expose only SSH, HTTP, and HTTPS.
+* **Process management**: PM2, configured to restart automatically on failure and on host reboot via `pm2 startup` and `pm2 save`.
+* **Reverse proxy**: Nginx, routing the `/helpdesk` path to the Node application on port 3000.
+* **Domain**: A free DuckDNS subdomain, since Let's Encrypt certificate issuance requires a domain name rather than a bare IP address.
+* **TLS**: Let's Encrypt via Certbot, with HTTP requests automatically redirected to HTTPS.
+* **Secrets**: Azure Key Vault, accessed through the virtual machine's Managed Identity.
 
-* Infrastructure: Azure VM (Ubuntu 24.04 LTS), hardened with UFW (ports 22, 80, 443 only)
-* Process manager: PM2, auto restarts on crash and auto starts on VM reboot (pm2 startup, then pm2 save)
-* Reverse proxy: Nginx, routing /helpdesk to the Node app on port 3000
-* Domain: Free DuckDNS subdomain (helpdesk-badproject1.duckdns.org), since Let's Encrypt requires a real domain rather than a bare IP
-* SSL: Let's Encrypt via Certbot, with automatic HTTP to HTTPS redirect
-* Secrets: Azure Key Vault, accessed via the VM's Managed Identity
+## Roles and Permissions
 
-## RBAC Roles
+* **STUDENT / FACULTY**: submit tickets, view and comment on their own tickets.
+* **TECHNICIAN**: view all tickets, claim tickets, update ticket status.
+* **ADMIN**: full access, including technician account management.
 
-* STUDENT / FACULTY: Submit tickets, view/comment on own tickets
-* TECHNICIAN: View all tickets, claim tickets, update status
-* ADMIN: Full access, manage technician accounts
+## Data Model
 
-## Database Schema
+Defined in `prisma/schema.prisma`:
+* **User**: unique identifier, Active Directory object ID, name, email, role.
+* **Ticket**: title, description, status, priority, room location, and relations to its requester, assigned technician, and category.
+* **Category**: populated automatically based on Gemini's classification of ticket content.
+* **TicketUpdate**: an audit trail of comments and status changes on a ticket.
 
-Core entities, full schema in prisma/schema.prisma:
-* User: id, adObjectId, name, email, role (enum: STUDENT, FACULTY, TECHNICIAN, ADMIN)
-* Ticket: id, title, description, status, priority, roomLocation, relations to requester/technician/category
-* Category: auto populated by Gemini categorization
-* TicketUpdate: comment/audit trail on a ticket
+## Service Integration Scope
 
-## Peer API Documentation
-
-N/A. The Service to Service (Peer API) requirement was waived for this project per the instructor's note (see "Peer API Requirement, Waived" section above). External Integrations (Gemini and SendGrid) satisfying the External Integration requirement are documented in the section above.
+This project satisfies its external integration requirement through two independent third party APIs, Google Gemini and SendGrid, as described above. A peer to peer service integration with another team's API was not implemented for this project; that scope was addressed instead through the two integrations documented here.
